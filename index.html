@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Fuga Cubes</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Fuga Cubes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#e8eef8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1322" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<style>
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box;height:100%}
+body{margin:0;font-size:14px}
+
+:root{
+  /* Layout: app de una pantalla. Lienzo 3D al fondo; vistas (menú, juego, paneles) se apilan encima */
+  --bg:#e8eef8; --bg2:#d3def0; --ink:#14213a; --muted:#5c6884; --surface:#f6f8fc;
+  --tile:#fbfcff; --edge:#b4c3dc; --arrow:#111a2e;
+  --accent:#2f6df6; --accent-ink:#ffffff; --danger:#e0453a; --ok:#1d9a69; --gold:#f2a516;
+  --btn:#ffffff; --track:#c9d5ea;
+  --font-ui:"Avenir Next","Segoe UI",system-ui,-apple-system,sans-serif;
+  --font-num:ui-rounded,"SF Pro Rounded","Avenir Next",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0d1322; --bg2:#16213a; --ink:#e6ecf8; --muted:#8d9ab7; --surface:#131c31;
+  --tile:#dbe3f1; --edge:#8798b8; --arrow:#0e1628;
+  --accent:#5b8cff; --accent-ink:#ffffff; --danger:#ff6155; --ok:#3cc68c; --gold:#ffc23d;
+  --btn:#1b2742; --track:#26334f; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0d1322; --bg2:#16213a; --ink:#e6ecf8; --muted:#8d9ab7; --surface:#131c31;
+  --tile:#dbe3f1; --edge:#8798b8; --arrow:#0e1628;
+  --accent:#5b8cff; --accent-ink:#ffffff; --danger:#ff6155; --ok:#3cc68c; --gold:#ffc23d;
+  --btn:#1b2742; --track:#26334f; color-scheme:dark;}
+/* Temas elegidos en Ajustes (ganan a los del sistema) */
+:root[data-skin="light"]{
+  --bg:#e8eef8; --bg2:#d3def0; --ink:#14213a; --muted:#5c6884; --surface:#f6f8fc;
+  --tile:#fbfcff; --edge:#b4c3dc; --arrow:#111a2e;
+  --accent:#2f6df6; --accent-ink:#ffffff; --danger:#e0453a; --ok:#1d9a69; --gold:#f2a516;
+  --btn:#ffffff; --track:#c9d5ea; color-scheme:light;}
+:root[data-skin="dark"]{
+  --bg:#0d1322; --bg2:#16213a; --ink:#e6ecf8; --muted:#8d9ab7; --surface:#131c31;
+  --tile:#dbe3f1; --edge:#8798b8; --arrow:#0e1628;
+  --accent:#5b8cff; --accent-ink:#ffffff; --danger:#ff6155; --ok:#3cc68c; --gold:#ffc23d;
+  --btn:#1b2742; --track:#26334f; color-scheme:dark;}
+:root[data-skin="neon"]{
+  --bg:#0a0718; --bg2:#1d1046; --ink:#f1ecff; --muted:#a294d6; --surface:#140d30;
+  --tile:#1b1340; --edge:#5a45b0; --arrow:#5ef2ff;
+  --accent:#ff4fd8; --accent-ink:#1a0820; --danger:#ff5470; --ok:#47f0a0; --gold:#ffd34f;
+  --btn:#1d1545; --track:#2c2160; color-scheme:dark;}
+:root[data-skin="paper"]{
+  --bg:#eeebe4; --bg2:#ddd8cc; --ink:#24221f; --muted:#6f6a60; --surface:#f7f5f0;
+  --tile:#fffefa; --edge:#c9c2b2; --arrow:#24221f;
+  --accent:#2948a8; --accent-ink:#ffffff; --danger:#c43b2c; --ok:#2f7d4f; --gold:#c98a0b;
+  --btn:#fffefa; --track:#d6d0c2; color-scheme:light;}
+
+[hidden]{display:none!important}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);overflow:hidden;
+  touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+#app{position:relative;height:100%;overflow:hidden;background:radial-gradient(circle at 50% 42%,var(--bg2),var(--bg) 72%)}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.view{position:absolute;inset:0;display:flex;flex-direction:column;pointer-events:none}
+.view>*{pointer-events:auto}
+.view .stage{pointer-events:none;flex:1;min-height:0;position:relative}
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+button{font:inherit;font-weight:700;font-size:.95rem;color:var(--ink);background:var(--btn);border:1.5px solid var(--edge);
+  border-radius:14px;padding:11px 14px;cursor:pointer}
+button:active{transform:translateY(1px)}
+button:focus-visible,input:focus-visible+.sw{outline:3px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.4;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.round{width:44px;height:44px;padding:0;border-radius:50%;font-size:1.35rem;line-height:1;display:grid;place-items:center;flex:none}
+button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.stars{color:var(--gold);letter-spacing:.06em}
+.stars .off{color:var(--track)}
+
+/* ---------- Menú ---------- */
+#vMenu{padding-block:18px 18px;gap:14px}
+.brand{text-align:center;display:flex;flex-direction:column;gap:4px;pointer-events:none}
+.brand h1{margin:0;font-family:var(--font-num);font-weight:900;font-size:2.4rem;letter-spacing:-.03em;line-height:1}
+.brand p{margin:0;color:var(--muted);font-weight:600}
+.rankpill{pointer-events:auto;align-self:center;margin-top:8px;display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;font-size:.92rem;
+  background:var(--btn);border:1.5px solid var(--gold)}
+.rankpill b{font-family:var(--font-num);font-size:1.05rem;color:var(--ink)}
+.rankpill span{color:var(--muted);font-weight:600}
+.myrank{display:flex;align-items:center;justify-content:space-between;gap:12px;border-color:var(--gold)}
+.myrank .n{font-family:var(--font-num);font-weight:900;font-size:2.2rem;line-height:1}
+.myrank small{display:block;color:var(--muted);font-weight:600}
+.tabs button{padding:8px 4px}
+.menu{display:flex;flex-direction:column;gap:10px;width:min(440px,100%);margin-inline:auto}
+.menu .big{display:flex;justify-content:space-between;align-items:center;font-size:1.1rem;padding:16px 18px;border-radius:18px}
+.menu .big small{font-weight:600;opacity:.85;font-size:.85rem}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mode{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:12px 14px;border-radius:16px}
+.mode b{font-size:1rem}
+.mode span{font-weight:600;font-size:.8rem;color:var(--muted)}
+.badge{font-size:.75rem;font-weight:800;background:var(--accent-ink);color:var(--accent);border-radius:999px;padding:3px 8px}
+.badge.done{background:var(--ok);color:#fff}
+
+/* ---------- Juego ---------- */
+.bar{display:flex;align-items:center;gap:10px;padding-block:10px 6px}
+.bar .lbl{flex:1;min-width:0;font-family:var(--font-num);font-weight:800;font-size:1.25rem;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .lbl small{display:block;font-size:.7rem;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.mid{display:flex;gap:4px;align-items:center}
+.lives svg{width:22px;height:22px}
+.lives .on path{fill:var(--danger)}
+.lives .off path{fill:none;stroke:var(--muted);stroke-width:2}
+.timer{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-weight:800;font-size:1.3rem}
+.timer.low{color:var(--danger)}
+.count{font-family:var(--font-num);font-variant-numeric:tabular-nums;text-align:right;font-weight:800;font-size:1.15rem;min-width:56px}
+.count small{display:block;font-size:.7rem;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.prog{height:5px;border-radius:3px;background:var(--track);overflow:hidden;margin-bottom:4px}
+.prog i{display:block;height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .3s}
+.zoom{position:absolute;top:8px;right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:8px;pointer-events:auto}
+.tip{position:absolute;left:16px;right:16px;bottom:8px;text-align:center;color:var(--muted);font-size:.85rem;transition:opacity .4s}
+.controls{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding-block:10px 14px}
+.controls button{padding:11px 6px;font-size:.88rem}
+
+/* ---------- Paneles ---------- */
+.panel{background:var(--bg);pointer-events:auto;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch}
+.phead{display:flex;align-items:center;gap:12px;padding-block:12px;position:sticky;top:0;background:var(--bg);z-index:2}
+.phead h2{margin:0;font-family:var(--font-num);font-size:1.45rem;letter-spacing:-.01em}
+.pbody{display:flex;flex-direction:column;gap:16px;padding-block:4px 28px;width:min(560px,100%);margin-inline:auto;box-sizing:border-box}
+.card{background:var(--surface);border:1.5px solid var(--edge);border-radius:18px;padding:16px}
+.card h3{margin:0 0 10px;font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.today{display:flex;flex-direction:column;gap:12px}
+.today .big{font-family:var(--font-num);font-size:1.6rem;font-weight:900}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+.kpis div{background:var(--btn);border:1.5px solid var(--edge);border-radius:14px;padding:10px 4px}
+.kpis b{display:block;font-family:var(--font-num);font-size:1.35rem;font-variant-numeric:tabular-nums}
+.kpis span{font-size:.75rem;color:var(--muted);font-weight:600}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}
+.cal .h{font-size:.72rem;font-weight:800;color:var(--muted);padding-block:4px}
+.cal .d{aspect-ratio:1;max-width:100%;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:.85rem;font-weight:700;font-variant-numeric:tabular-nums}
+.cal .d.done{background:var(--accent);color:var(--accent-ink)}
+.cal .d.today{outline:2px solid var(--accent);outline-offset:-2px}
+.cal .d.fut{color:var(--muted);opacity:.5}
+.cal .d i{font-style:normal;font-size:.55rem;letter-spacing:-.05em;line-height:1}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tabs button{flex:1;padding:8px;font-size:.85rem;border-radius:10px}
+.lb{display:flex;flex-direction:column;gap:6px;list-style:none;margin:0;padding:0}
+.lb li{display:flex;align-items:center;gap:10px;background:var(--btn);border:1.5px solid var(--edge);border-radius:12px;padding:8px 10px}
+.lb li.me{border-color:var(--accent)}
+.lb .pos{font-family:var(--font-num);font-weight:900;width:22px;text-align:center;color:var(--muted)}
+.lb img{width:30px;height:30px;border-radius:50%;flex:none}
+.lb .nm{flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb .sc{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-weight:800;text-align:right}
+.muted{color:var(--muted);font-size:.88rem;margin:0}
+.lvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(66px,1fr));gap:8px}
+.lvgrid button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 4px;border-radius:14px;font-family:var(--font-num);font-size:1.15rem}
+.lvgrid button small{font-size:.7rem}
+.lvgrid button.cur{border-color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chips button{padding:8px 12px;border-radius:999px;font-size:.88rem}
+.tg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:8px;cursor:pointer}
+.tg span{font-weight:600}
+.tg small{display:block;color:var(--muted);font-weight:500;font-size:.8rem}
+.tg input{position:absolute;opacity:0;pointer-events:none}
+.sw{width:46px;height:28px;border-radius:999px;background:var(--track);position:relative;flex:none;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:var(--btn);transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.tg input:checked+.sw{background:var(--accent)}
+.tg input:checked+.sw::after{transform:translateX(18px)}
+
+/* ---------- Avisos ---------- */
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:auto;
+  background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);padding:16px;z-index:20}
+.dlg{background:var(--btn);border:1.5px solid var(--edge);border-radius:22px;padding:24px 20px;text-align:center;
+  display:flex;flex-direction:column;gap:10px;width:min(340px,100%);box-sizing:border-box}
+.dlg h2{margin:0;font-family:var(--font-num);font-size:1.6rem;text-wrap:balance}
+.dlg .stars{font-size:2rem}
+.dlg p{margin:0;color:var(--muted)}
+.dlg .btns{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.dlg textarea{font:inherit;font-size:.85rem;width:100%;box-sizing:border-box;border-radius:10px;border:1.5px solid var(--edge);background:var(--surface);color:var(--ink);padding:8px;resize:none;user-select:text;-webkit-user-select:text}
+.toast{position:absolute;left:50%;top:76px;transform:translateX(-50%);background:var(--ink);color:var(--bg);font-weight:700;font-size:.9rem;
+  padding:8px 14px;border-radius:999px;z-index:30;pointer-events:none;white-space:nowrap;transition:opacity .3s}
+@media (prefers-reduced-motion:reduce){.tip,.prog i,.sw,.sw::after,.toast{transition:none}}
+.inp{font:inherit;font-size:16px;flex:1;min-width:0;padding:10px 12px;border-radius:12px;border:1.5px solid var(--edge);background:var(--btn);color:var(--ink);user-select:text;-webkit-user-select:text;touch-action:manipulation}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="cv" aria-label="Cubo de flechas en 3D"></canvas>
+
+  <!-- MENÚ -->
+  <section class="view gut" id="vMenu">
+    <div class="brand"><h1>Fuga Cubes</h1><p id="mStreak">Saca cada flecha sin chocar</p>
+      <button class="rankpill" id="mRank" hidden></button></div>
+    <div class="stage" id="menuStage"></div>
+    <div class="menu">
+      <button class="primary big" id="mPlay"><span>Continuar</span><small id="mPlayLvl">Nivel 1</small></button>
+      <button class="big" id="mDaily"><span>Reto diario</span><span class="badge" id="mDailyB">Nuevo</span></button>
+      <div class="grid2">
+        <button class="mode" id="mTA"><b>Contrarreloj</b><span id="mTAs">60 segundos</span></button>
+        <button class="mode" id="mZen"><b>Zen</b><span id="mZens">Sin vidas ni tiempo</span></button>
+        <button class="mode" id="mShapes"><b>Formas</b><span id="mShapess">Pirámide, esfera…</span></button>
+        <button class="mode" id="mLevels"><b>Niveles</b><span id="mLevelss">Repite y saca ★★★</span></button>
+      </div>
+      <button id="mSettings">Ajustes</button>
+    </div>
+  </section>
+
+  <!-- JUEGO -->
+  <section class="view" id="vGame" hidden>
+    <div class="bar gut">
+      <button class="round" id="gBack" aria-label="Volver al menú">‹</button>
+      <div class="lbl"><small id="gLblS">Nivel</small><span id="gLbl">1</span></div>
+      <div class="mid lives" id="gLives" aria-label="Vidas"></div>
+      <div class="mid timer" id="gTimer" hidden>1:00</div>
+      <div class="count"><small id="gCntS">Flechas</small><span id="gCnt">0</span></div>
+    </div>
+    <div class="gut"><div class="prog"><i id="gProg"></i></div></div>
+    <div class="stage" id="gameStage">
+      <div class="zoom">
+        <button class="round" id="zIn" aria-label="Acercar">+</button>
+        <button class="round" id="zOut" aria-label="Alejar">−</button>
+        <button class="round" id="zReset" aria-label="Centrar cubo" style="font-size:1.1rem">⟲</button>
+      </div>
+      <div class="tip" id="gTip">Toca una flecha y sale hacia donde apunta. Arrastra para girar, pellizca para zoom.</div>
+    </div>
+    <div class="controls gut">
+      <button id="cRestart">Reiniciar</button>
+      <button id="cHint">Pista</button>
+      <button id="cGuide" aria-pressed="false">Guía</button>
+      <button id="cUndo">Deshacer</button>
+    </div>
+  </section>
+
+  <!-- RETO DIARIO -->
+  <section class="view panel" id="vDaily" hidden>
+    <div class="phead gut"><button class="round" data-back aria-label="Volver">‹</button><h2>Reto diario</h2></div>
+    <div class="pbody gut">
+      <div class="card today">
+        <div class="row"><div><h3 id="dDate">Hoy</h3><div class="big" id="dStatus">Sin jugar</div></div><div class="stars" id="dStars" style="font-size:1.4rem"></div></div>
+        <button class="primary" id="dPlay">Jugar el reto de hoy</button>
+        <button id="dShare" hidden>Copiar resultado</button>
+      </div>
+      <div class="kpis">
+        <div><b id="kStreak">0</b><span>Racha 🔥</span></div>
+        <div><b id="kBest">0</b><span>Mejor racha</span></div>
+        <div><b id="kTotal">0</b><span>Retos hechos</span></div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:8px"><button class="round" id="calPrev" aria-label="Mes anterior">‹</button><h3 id="calTitle" style="margin:0">Mes</h3><button class="round" id="calNext" aria-label="Mes siguiente">›</button></div>
+        <div class="cal" id="cal"></div>
+      </div>
+      <button id="dRank">Ver ranking</button>
+    </div>
+  </section>
+
+  <!-- RANKING -->
+  <section class="view panel" id="vRank" hidden>
+    <div class="phead gut"><button class="round" data-back aria-label="Volver">‹</button><h2>Ranking</h2></div>
+    <div class="pbody gut">
+      <div class="card myrank" id="rkMe" hidden></div>
+      <div class="card">
+        <div class="tabs"><button id="tbGen" aria-pressed="true">General</button><button id="tbDay" aria-pressed="false">Reto de hoy</button><button id="tbTA" aria-pressed="false">Contrarreloj</button></div>
+        <ul class="lb" id="lb"></ul>
+        <p class="muted" id="lbNote" style="margin-top:10px"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- NIVELES -->
+  <section class="view panel" id="vLevels" hidden>
+    <div class="phead gut"><button class="round" data-back aria-label="Volver">‹</button><h2>Niveles</h2></div>
+    <div class="pbody gut">
+      <p class="muted" id="lvSum"></p>
+      <div class="lvgrid" id="lvGrid"></div>
+    </div>
+  </section>
+
+  <!-- AJUSTES -->
+  <section class="view panel" id="vSettings" hidden>
+    <div class="phead gut"><button class="round" data-back aria-label="Volver">‹</button><h2>Ajustes</h2></div>
+    <div class="pbody gut">
+      <div class="card"><h3>Tema</h3><div class="chips" id="skins"></div></div>
+      <div class="card">
+        <h3>Juego</h3>
+        <label class="tg"><span>Sonidos<small>Efectos suaves al sacar flechas</small></span><input type="checkbox" id="sSound"><i class="sw"></i></label>
+        <label class="tg"><span>Vibración<small>En iPhone el navegador no la permite</small></span><input type="checkbox" id="sVib"><i class="sw"></i></label>
+        <label class="tg"><span>Línea guía siempre activa<small>Primer toque muestra el camino, segundo toque la suelta</small></span><input type="checkbox" id="sGuide"><i class="sw"></i></label>
+      </div>
+      <div class="card">
+        <h3>Tu apodo en la tabla</h3>
+        <div class="row"><input id="sName" class="inp" maxlength="20" placeholder="Ej. Frito" autocomplete="nickname"><button id="sNameSave">Guardar</button></div>
+      </div>
+      <div class="card">
+        <h3>Progreso</h3>
+        <p class="muted" id="syncNote">Guardado en este dispositivo.</p>
+        <div class="row" style="margin-top:12px"><div><small class="muted">Código de este cel</small><div id="sCode" style="font-family:var(--font-num);font-weight:900;font-size:1.3rem;letter-spacing:.08em;user-select:text;-webkit-user-select:text">----</div></div><button id="sCodeCopy">Copiar</button></div>
+        <p class="muted" style="margin-top:12px">¿Juegas en otro cel? Escribe aquí el código de ese cel para unir el progreso.</p>
+        <div class="row" style="margin-top:8px"><input id="sLinkIn" class="inp" maxlength="9" placeholder="ABCD-1234" autocapitalize="characters" autocomplete="off"><button id="sLink">Vincular</button></div>
+        <button id="sReset" style="margin-top:12px;width:100%">Borrar todo mi progreso</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="overlay" id="ov" hidden><div class="dlg" id="dlg"></div></div>
+  <div class="toast" id="toast" hidden></div>
+</div>
+<script src="firebase-app-compat.js"></script>
+<script src="firebase-auth-compat.js"></script>
+<script src="firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
+</body>
+</html>
