@@ -31,6 +31,7 @@ function rid(n){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',r=crypto.getRandomVal
 let CODE=null;try{CODE=localStorage.getItem('fdc-code')}catch(e){}
 if(!CODE){CODE=rid(8);try{localStorage.setItem('fdc-code',CODE)}catch(e){}}
 if(!S.pid)S.pid=rid(12);
+const normName=s=>String(s||'').normalize('NFC').trim().replace(/\s+/g,' ').toLowerCase();
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);
 // Nube con Firebase (proyecto del casino). Sin internet el juego sigue normal.
 const Cloud={ok:false,names:{},
@@ -45,9 +46,19 @@ const Cloud={ok:false,names:{},
   async loadPrivate(){const s=await withTimeout(this.fs.collection('fdc_users').doc(CODE).get(),8000);
     return s.exists?JSON.parse(s.data().__j):null},
   savePrivate(o){return this.fs.collection('fdc_users').doc(CODE).set({__j:JSON.stringify(o),updated:Date.now()})},
-  savePublic(o){o.name=S.name||'';return this.fs.collection('fdc_daily').doc(S.pid).set({__j:JSON.stringify(o),updated:Date.now()})},
+  // Solo apareces en el ranking cuando ya pusiste tu nombre
+  savePublic(o){if(!S.name)return Promise.resolve();o.name=S.name;o.code=CODE;return this.fs.collection('fdc_daily').doc(S.pid).set({__j:JSON.stringify(o),updated:Date.now()})},
   async listPublic(){const q=await withTimeout(this.fs.collection('fdc_daily').orderBy('updated','desc').limit(300).get(),8000);
-    const out=[];q.docs.forEach(d=>{try{const data=JSON.parse(d.data().__j);this.names[d.id]=data.name;out.push({id:d.id,data})}catch(e){}});return out},
+    // Sin nombre no cuenta; mismo nombre = misma persona (se queda con lo mejor de cada sesión)
+    const by=new Map();
+    q.docs.forEach(d=>{try{const data=JSON.parse(d.data().__j);if(!data.name||!data.name.trim())return;
+      const k=normName(data.name),cur=by.get(k);
+      if(!cur){by.set(k,{id:d.id,data});return}
+      const a=cur.data,m={...a,level:Math.max(+a.level||1,+data.level||1),stars:Math.max(+a.stars||0,+data.stars||0),ta:Math.max(+a.ta||0,+data.ta||0),days:{...(a.days||{})}};
+      for(const dk in data.days||{})m.days[dk]=better(m.days[dk],data.days[dk]);
+      by.set(k,{id:d.id===S.pid?d.id:cur.id,data:m});
+    }catch(e){}});
+    const out=[...by.values()];out.forEach(r=>this.names[r.id]=r.data.name);return out},
   async profiles(ids){const o={};ids.forEach(id=>o[id]={name:this.names[id]||('Jugador '+id.slice(0,3))});return o}
 };
 function makeWriter(fn){let busy=false,again=false;
@@ -304,7 +315,6 @@ function onCleared(){
   }else if(m==='daily'){
     const t=performance.now()-G.t0,res={s:stars,t:Math.round(t),c:errs};
     const prev=S.daily[MODE.key];S.daily[MODE.key]=better(prev,res);save(true);if(!prev)Push.retoHecho(MODE.key,res);
-    if(!prev&&MODE.key===todayKey()&&window.PUSH)PUSH.daily(MODE.key,res);
     const st=streak();
     dialog(`<div class="stars">${starStr(stars)}</div><h2>Reto completado</h2><p>${fmtT(t)} · ${errs?errs+' choque'+(errs>1?'s':''):'sin choques'}</p><p>🔥 Racha: ${st.cur} día${st.cur>1?'s':''}</p>`,
       [['Copiar resultado',()=>share(MODE.key),true],['Ver ranking',()=>{lbTab='day';show('rank')}],['Menú',()=>show('menu')]]);
@@ -456,7 +466,6 @@ function renderLevels(){
 // ---------- Panel: ajustes ----------
 const SKINS=[['auto','Automático'],['light','Claro'],['dark','Oscuro'],['neon','Neón'],['paper','Papel']];
 function renderSettings(){
-  window.PUSH&&PUSH.paint();
   const c=$('skins');c.innerHTML='';
   SKINS.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.setAttribute('aria-pressed',S.skin===k);
     b.onclick=()=>{S.skin=k;applySkin();save();renderSettings()};c.appendChild(b)});
@@ -469,7 +478,7 @@ function renderSettings(){
 $('sSound').onchange=e=>{S.sound=e.target.checked;save();if(S.sound)SFX.pop()};
 $('sVib').onchange=e=>{S.vib=e.target.checked;save();buzz(40)};
 $('sGuide').onchange=e=>{S.guide=e.target.checked;save()};
-$('sNameSave').onclick=()=>{const v=$('sName').value.trim().slice(0,20);S.name=v;save(true);window.PUSH&&PUSH.touch();toast(v?'Apodo guardado':'Apodo borrado');renderSettings()};
+$('sNameSave').onclick=()=>{const v=$('sName').value.trim().slice(0,20);if(v.length<2){toast('Escribe al menos 2 letras');return}claimName(v,false)};
 $('sCodeCopy').onclick=()=>{const t=CODE.slice(0,4)+'-'+CODE.slice(4);try{navigator.clipboard.writeText(t).then(()=>toast('Código copiado'),()=>toast(t))}catch(e){toast(t)}};
 $('sLink').onclick=async()=>{
   const v=$('sLinkIn').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -680,7 +689,24 @@ function askName(){
 function okName(){
   const v=$('obName').value.trim().slice(0,20);
   if(v.length<2){toast('Escribe al menos 2 letras');return}
-  S.name=v;save(true);$('ov').hidden=true;refreshMenu();toast('¡Hola, '+v+'!');
+  $('ov').hidden=true;claimName(v,true);
+}
+// Si ese nombre ya existe (sin importar mayúsculas o espacios), este cel toma esa misma partida
+async function claimName(v,welcome){
+  let back=false;
+  if(Cloud.ok){try{
+    const rows=await Cloud.listPublic();
+    const hit=rows.find(r=>r.id!==S.pid&&normName(r.data.name)===normName(v)&&r.data.code);
+    if(hit&&hit.data.code!==CODE){
+      const old=CODE;CODE=hit.data.code;
+      const r=await Cloud.loadPrivate();
+      if(r){try{localStorage.setItem('fdc-code',CODE)}catch(e){}mergeRemote(r);S.pid=hit.id;applySkin();back=true}
+      else CODE=old;
+    }else if(hit){S.pid=hit.id;back=true}
+  }catch(e){}}
+  S.name=back?(S.name&&normName(S.name)===normName(v)?S.name:v):v;
+  save(true);refreshMenu();if(view==='settings')renderSettings();
+  toast(back?'¡Qué onda de vuelta, '+S.name+'! Recuperé tu partida':(welcome?'¡Hola, '+v+'!':'Nombre guardado'));
   if(Cloud.ok)Push.touch();
 }
 
