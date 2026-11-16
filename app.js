@@ -64,6 +64,7 @@ function save(pub){
 (async()=>{
   if(!await Cloud.init()){refreshMenu();return}
   try{const r=await Cloud.loadPrivate();mergeRemote(r);applySkin();save(true)}catch(e){}
+  Push.touch();
   refreshMenu();if(view==='daily')renderDaily();if(view==='settings')renderSettings();if(view==='rank')renderLB();
 })();
 
@@ -302,7 +303,8 @@ function onCleared(){
       [['Siguiente nivel',()=>startLevel(MODE.n+1),true],['Menú',()=>show('menu')]]);
   }else if(m==='daily'){
     const t=performance.now()-G.t0,res={s:stars,t:Math.round(t),c:errs};
-    const prev=S.daily[MODE.key];S.daily[MODE.key]=better(prev,res);save(true);
+    const prev=S.daily[MODE.key];S.daily[MODE.key]=better(prev,res);save(true);if(!prev)Push.retoHecho(MODE.key,res);
+    if(!prev&&MODE.key===todayKey()&&window.PUSH)PUSH.daily(MODE.key,res);
     const st=streak();
     dialog(`<div class="stars">${starStr(stars)}</div><h2>Reto completado</h2><p>${fmtT(t)} · ${errs?errs+' choque'+(errs>1?'s':''):'sin choques'}</p><p>🔥 Racha: ${st.cur} día${st.cur>1?'s':''}</p>`,
       [['Copiar resultado',()=>share(MODE.key),true],['Ver ranking',()=>{lbTab='day';show('rank')}],['Menú',()=>show('menu')]]);
@@ -454,6 +456,7 @@ function renderLevels(){
 // ---------- Panel: ajustes ----------
 const SKINS=[['auto','Automático'],['light','Claro'],['dark','Oscuro'],['neon','Neón'],['paper','Papel']];
 function renderSettings(){
+  window.PUSH&&PUSH.paint();
   const c=$('skins');c.innerHTML='';
   SKINS.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.setAttribute('aria-pressed',S.skin===k);
     b.onclick=()=>{S.skin=k;applySkin();save();renderSettings()};c.appendChild(b)});
@@ -461,11 +464,12 @@ function renderSettings(){
   $('syncNote').textContent=Cloud.ok?'Se guarda en este cel y en la nube. Sin internet se guarda aquí y se sube cuando vuelvas a tener señal.':'Se guarda en este cel. Sin conexión ahorita; se sube a la nube cuando vuelvas a tener señal.';
   $('sCode').textContent=CODE.slice(0,4)+'-'+CODE.slice(4);
   if(document.activeElement!==$('sName'))$('sName').value=S.name||'';
+  Push.paint();
 }
 $('sSound').onchange=e=>{S.sound=e.target.checked;save();if(S.sound)SFX.pop()};
 $('sVib').onchange=e=>{S.vib=e.target.checked;save();buzz(40)};
 $('sGuide').onchange=e=>{S.guide=e.target.checked;save()};
-$('sNameSave').onclick=()=>{const v=$('sName').value.trim().slice(0,20);S.name=v;save(true);toast(v?'Apodo guardado':'Apodo borrado');renderSettings()};
+$('sNameSave').onclick=()=>{const v=$('sName').value.trim().slice(0,20);S.name=v;save(true);window.PUSH&&PUSH.touch();toast(v?'Apodo guardado':'Apodo borrado');renderSettings()};
 $('sCodeCopy').onclick=()=>{const t=CODE.slice(0,4)+'-'+CODE.slice(4);try{navigator.clipboard.writeText(t).then(()=>toast('Código copiado'),()=>toast(t))}catch(e){toast(t)}};
 $('sLink').onclick=async()=>{
   const v=$('sLinkIn').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -667,6 +671,88 @@ cv.addEventListener('wheel',e=>{e.preventDefault();const r=app.getBoundingClient
 
 function resize(){const r=app.getBoundingClientRect();DPR=Math.min(window.devicePixelRatio||1,3);W=r.width;H=r.height;cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR)}
 new ResizeObserver(resize).observe(app);resize();
+// ================= Bienvenida: nombre de usuario =================
+function askName(){
+  dialog(`<h2>¡Bienvenido a Fuga Cubes!</h2><p>¿Cómo te llamas? Así te verán tus amigos en el ranking.</p><input id="obName" class="inp" maxlength="20" placeholder="Tu nombre" autocomplete="nickname" enterkeyhint="go" style="flex:none;width:100%;box-sizing:border-box;text-align:center">`,
+    [['Empezar',okName,true]]);
+  const i=$('obName');i.addEventListener('keydown',e=>{if(e.key==='Enter')okName()});setTimeout(()=>i.focus(),60);
+}
+function okName(){
+  const v=$('obName').value.trim().slice(0,20);
+  if(v.length<2){toast('Escribe al menos 2 letras');return}
+  S.name=v;save(true);$('ov').hidden=true;refreshMenu();toast('¡Hola, '+v+'!');
+  if(Cloud.ok)Push.touch();
+}
+
+// ================= Avisos al cel =================
+// Cada cel guarda su "dirección de avisos" en Firebase (fdc_push/<cel>). Para avisar,
+// la app junta esas direcciones y le pide al servidor de Cloudflare (el del casino) que las mande.
+const Push=(()=>{
+  const URLW=window.PUSH_URL,KEY=window.PUSH_PUBLIC,TOK=window.PUSH_TOKEN;
+  const isIOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  const standalone=()=>(window.matchMedia&&matchMedia('(display-mode: standalone)').matches)||navigator.standalone===true;
+  const supported=()=>!!URLW&&'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;
+  const unb64u=s=>{s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
+  let DEV=null;try{DEV=localStorage.getItem('fdc-dev')}catch(e){}
+  if(!DEV){DEV=rid(10);try{localStorage.setItem('fdc-dev',DEV)}catch(e){}}
+  const isOn=()=>{try{return localStorage.getItem('fdc-push')==='on'}catch(e){return false}};
+  function paint(){
+    const b=$('pushBtn'),n=$('pushNote');if(!b)return;
+    if(!URLW){b.hidden=true;n.textContent='';return}
+    if(isIOS&&!standalone()){b.hidden=true;n.textContent='Para recibir avisos, abre Fuga Cubes desde el ícono de tu pantalla de inicio.';return}
+    if(!supported()){b.hidden=true;n.textContent='Este cel no permite avisos de apps web (en iPhone se necesita iOS 16.4 o más nuevo).';return}
+    const p=Notification.permission,on=p==='granted'&&isOn();
+    b.hidden=on;
+    n.textContent=p==='denied'?'Bloqueaste los avisos. Actívalos en Ajustes del iPhone → Notificaciones → Fuga Cubes.'
+      :on?'🔔 Activados: te llega un aviso cuando alguien termine el reto de hoy.'
+      :'Te avisamos cuando alguien termine el reto de hoy, aunque tengas la app cerrada.';
+  }
+  async function store(sub){if(!Cloud.ok||!sub)return;
+    await Cloud.fs.collection('fdc_push').doc(DEV).set({pid:S.pid,name:S.name||'',sub:JSON.stringify(sub),at:Date.now()})}
+  async function enable(){
+    try{
+      if(!Cloud.ok){toast('Necesitas internet para activar los avisos');return}
+      const p=await Notification.requestPermission();if(p!=='granted'){paint();return}
+      const reg=await navigator.serviceWorker.ready;
+      let sub=await reg.pushManager.getSubscription();
+      if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:unb64u(KEY)});
+      await store(sub);localStorage.setItem('fdc-push','on');toast('🔔 Avisos activados');
+    }catch(e){toast('No se pudieron activar los avisos. Intenta otra vez.')}
+    paint();
+  }
+  async function touch(){
+    if(!supported()||Notification.permission!=='granted'||!Cloud.ok){paint();return}
+    try{const reg=await navigator.serviceWorker.ready,sub=await reg.pushManager.getSubscription();
+      if(sub){await store(sub);localStorage.setItem('fdc-push','on')}else localStorage.removeItem('fdc-push')}catch(e){}
+    paint();
+  }
+  async function send(msg){
+    if(!URLW||!Cloud.ok)return;
+    try{
+      const qs=await Cloud.fs.collection('fdc_push').get();
+      const subs=[],ids=[],old=Date.now()-60*864e5;
+      qs.docs.forEach(d=>{const v=d.data()||{};if(v.pid===S.pid||(v.at||0)<old)return;   // nunca a ti mismo
+        try{subs.push(JSON.parse(v.sub));ids.push(d.id)}catch(e){}});
+      if(!subs.length)return;
+      const r=await fetch(URLW,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(Object.assign({token:TOK,subs,url:'./'},msg))});
+      const j=await r.json().catch(()=>({}));
+      (j.status||[]).forEach((s,i)=>{if(s===404||s===410)Cloud.fs.collection('fdc_push').doc(ids[i]).delete().catch(()=>{})});
+    }catch(e){}
+  }
+  // Un solo aviso por persona por día: la primera vez que termina el reto
+  function retoHecho(key,res){
+    if(!Cloud.ok)return;
+    const k='fdc-pushreto:'+key;try{if(localStorage.getItem(k))return;localStorage.setItem(k,'1')}catch(e){}
+    const nm=S.name||'Alguien';
+    send({title:`🧊 ${nm} hizo el reto de hoy`,
+      body:`${'⭐'.repeat(res.s)} en ${fmtT(res.t)}${res.c?` · ${res.c} choque${res.c>1?'s':''}`:' · sin choques'}. ¿Le ganas?`,
+      tag:'reto-'+key+'-'+S.pid});
+  }
+  return{paint,enable,touch,retoHecho};
+})();
+$('pushBtn').onclick=()=>Push.enable();
+
 show('menu');
+if(!S.name)setTimeout(askName,500);
 requestAnimationFrame(frame);
 })();
