@@ -11,7 +11,7 @@ const MES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','se
 // Cloud es el único punto que depende de Claude. En una app instalable
 // (PWA) se reemplaza por Firebase y todo lo demás sigue igual.
 // =====================================================================
-const DEF={pid:'',name:'',level:1,stars:{},daily:{},ta:0,shapes:0,zen:0,skin:'auto',sound:true,vib:true,guide:false};
+const DEF={pid:'',name:'',seenCh:{},metas:{},level:1,stars:{},daily:{},ta:0,shapes:0,zen:0,skin:'auto',sound:true,vib:true,guide:false};
 let S=JSON.parse(JSON.stringify(DEF)),hadLocal=false;
 try{const j=JSON.parse(localStorage.getItem('fdc-state')||'null');
   if(j){S=Object.assign(S,j);hadLocal=true}
@@ -23,6 +23,7 @@ function mergeRemote(r){
   S.level=Math.max(S.level||1,+r.level||1);
   for(const k in r.stars||{})S.stars[k]=Math.max(S.stars[k]||0,r.stars[k]);
   for(const k in r.daily||{})S.daily[k]=better(S.daily[k],r.daily[k]);
+  S.seenCh=Object.assign({},r.seenCh||{},S.seenCh||{});S.metas=Object.assign({},r.metas||{},S.metas||{});
   S.ta=Math.max(S.ta||0,r.ta||0);S.shapes=Math.max(S.shapes||0,r.shapes||0);S.zen=Math.max(S.zen||0,r.zen||0);
   if(r.pid)S.pid=r.pid;if(r.name&&!S.name)S.name=r.name;
   if(!hadLocal)for(const k of['skin','sound','vib','guide'])if(k in r)S[k]=r[k];
@@ -34,7 +35,7 @@ if(!S.pid)S.pid=rid(12);
 const normName=s=>String(s||'').normalize('NFC').trim().replace(/\s+/g,' ').toLowerCase();
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);
 // Nube con Firebase (proyecto del casino). Sin internet el juego sigue normal.
-const Cloud={ok:false,names:{},
+const Cloud={ok:false,loaded:false,names:{},
   get uid(){return S.pid},
   async init(){try{
     const cfg=window.FIREBASE_CONFIG;if(!cfg||!window.firebase)return false;
@@ -43,9 +44,15 @@ const Cloud={ok:false,names:{},
     const u=await withTimeout(new Promise(res=>{const off=auth.onAuthStateChanged(x=>{off();res(x)})}),6000);
     if(!u)await withTimeout(auth.signInAnonymously(),8000);
     this.fs=firebase.firestore();this.ok=true;return true}catch(e){return false}},
-  async loadPrivate(){const s=await withTimeout(this.fs.collection('fdc_users').doc(CODE).get(),8000);
+  // Lee el progreso de una cuenta. Hasta que no se lea bien, este cel no sobrescribe nada en la nube.
+  async loadPrivate(code){const k=code||CODE,s=await withTimeout(this.fs.collection('fdc_users').doc(k).get(),10000);
+    if(!code||code===CODE)this.loaded=true;
     return s.exists?JSON.parse(s.data().__j):null},
-  savePrivate(o){return this.fs.collection('fdc_users').doc(CODE).set({__j:JSON.stringify(o),updated:Date.now()})},
+  async codeForPid(pid){const q=await withTimeout(this.fs.collection('fdc_users').get(),10000);let out=null;
+    q.docs.forEach(d=>{const v=d.data()||{};if(out)return;if(v.pid===pid){out=d.id;return}try{if(JSON.parse(v.__j).pid===pid)out=d.id}catch(e){}});return out},
+  async listRaw(){const q=await withTimeout(this.fs.collection('fdc_daily').orderBy('updated','desc').limit(300).get(),10000);
+    const out=[];q.docs.forEach(d=>{try{const data=JSON.parse(d.data().__j);if(data.name&&data.name.trim())out.push({id:d.id,data})}catch(e){}});return out},
+  savePrivate(o){if(!this.loaded)return Promise.resolve();return this.fs.collection('fdc_users').doc(CODE).set({__j:JSON.stringify(o),pid:S.pid,updated:Date.now()})},
   // Solo apareces en el ranking cuando ya pusiste tu nombre
   savePublic(o){if(!S.name)return Promise.resolve();o.name=S.name;o.code=CODE;return this.fs.collection('fdc_daily').doc(S.pid).set({__j:JSON.stringify(o),updated:Date.now()})},
   async listPublic(){const q=await withTimeout(this.fs.collection('fdc_daily').orderBy('updated','desc').limit(300).get(),8000);
@@ -54,9 +61,9 @@ const Cloud={ok:false,names:{},
     q.docs.forEach(d=>{try{const data=JSON.parse(d.data().__j);if(!data.name||!data.name.trim())return;
       const k=normName(data.name),cur=by.get(k);
       if(!cur){by.set(k,{id:d.id,data});return}
-      const a=cur.data,m={...a,level:Math.max(+a.level||1,+data.level||1),stars:Math.max(+a.stars||0,+data.stars||0),ta:Math.max(+a.ta||0,+data.ta||0),days:{...(a.days||{})}};
+      const top=(+data.level||1)>(+cur.data.level||1),a=top?data:cur.data,m={...a,level:Math.max(+a.level||1,+data.level||1),stars:Math.max(+a.stars||0,+data.stars||0),ta:Math.max(+a.ta||0,+data.ta||0),days:{...(a.days||{})}};
       for(const dk in data.days||{})m.days[dk]=better(m.days[dk],data.days[dk]);
-      by.set(k,{id:d.id===S.pid?d.id:cur.id,data:m});
+      by.set(k,{id:d.id===S.pid?d.id:cur.id===S.pid?cur.id:(top?d.id:cur.id),data:m});
     }catch(e){}});
     const out=[...by.values()];out.forEach(r=>this.names[r.id]=r.data.name);return out},
   async profiles(ids){const o={};ids.forEach(id=>o[id]={name:this.names[id]||('Jugador '+id.slice(0,3))});return o}
@@ -75,6 +82,7 @@ function save(pub){
 (async()=>{
   if(!await Cloud.init()){refreshMenu();return}
   try{const r=await Cloud.loadPrivate();mergeRemote(r);applySkin();save(true)}catch(e){}
+  if(S.name&&Cloud.loaded)await claimName(S.name,false,true);
   Push.touch();
   refreshMenu();if(view==='daily')renderDaily();if(view==='settings')renderSettings();if(view==='rank')renderLB();
 })();
@@ -128,15 +136,118 @@ const SHAPES=[
   {name:'Letra L',dims:[6,6,3],m:(x,y,z)=>x<3||y<3},
   {name:'Puente',dims:[7,5,3],m:(x,y,z)=>y>=3||x<2||x>4},
 ];
-const levelCfg=n=>{const b=Math.min(4+Math.floor((n-1)/2),9);
-  return{seed:n*7919+13,dims:[b,(n%3===2&&b>4)?b-1:b,b],minL:3,maxL:Math.min(4+Math.floor(n/2),16)}};
+// Capítulos de 10 niveles; el último de cada capítulo es una Meta
+const CHAPTERS=[
+  {name:'Calentamiento',desc:'Flechas cortas y muchas salidas. Aprende a leer el cubo.'},
+  {name:'Laberinto',desc:'De aquí se viene más complicado: las salidas fáciles casi desaparecen. Antes de tocar, fíjate qué bloquea a cada flecha.'},
+  {name:'Profundidades',desc:'Cubos más grandes: las flechas cruzan todo el cubo y tapan a otras desde adentro.'},
+  {name:'Nudos',desc:'Flechas más largas que se enredan entre sí. Una mala elección traba medio cubo.'},
+  {name:'Formas raras',desc:'Los cubos dejan de ser cubos: pirámides, cruces y escaleras con flechas escondidas.'},
+  {name:'Maestro',desc:'Lo más grande y enredado del juego. Aquí ya no hay regalos.'}];
+const chapterOf=n=>Math.floor((n-1)/10)+1;
+const chInfo=c=>{const i=Math.min(c,CHAPTERS.length)-1,b=CHAPTERS[i];return{name:c>CHAPTERS.length?b.name+' '+(c-CHAPTERS.length+1):b.name,desc:b.desc}};
+const isMeta=n=>n%10===0;
+const metaName=n=>n===10?'Graduación':SHAPES[(chapterOf(n)-2)%SHAPES.length].name;
+const levelCfg=n=>{const c=chapterOf(n),b=Math.min(4+Math.floor((n-1)/2),9);
+  if(isMeta(n)&&n>10){const sh=SHAPES[(c-2)%SHAPES.length];
+    // La forma se agranda para que la meta sea el reto más grande del capítulo
+    const big=Math.min(9+Math.floor(c/3),11),k=big/Math.max(...sh.dims),D=sh.dims.map(v=>Math.max(1,Math.round(v*k)));
+    const mask=sh.m?(x,y,z)=>sh.m(Math.floor(x*sh.dims[0]/D[0]),Math.floor(y*sh.dims[1]/D[1]),Math.floor(z*sh.dims[2]/D[2])):null;
+    return{seed:n*7919+13,dims:D,mask,minL:4,maxL:16,triv:0,lm:1.5,name:sh.name,meta:true}}
+  const cfg={seed:n*7919+13,dims:[b,(n%3===2&&b>4)?b-1:b,b],minL:3,maxL:Math.min(4+Math.floor(n/2),16),legacy:n<=10,triv:n<=14?0.06:0,meta:n===10,name:n===10?'Graduación':undefined};
+  if(c>=4)cfg.lm=1.5;                                         // Nudos: flechas más largas
+  if(c>=5&&n%3===0){const sh=SHAPES[n%SHAPES.length],k=9/Math.max(...sh.dims),D=sh.dims.map(v=>Math.max(1,Math.round(v*k)));  // Formas raras
+    cfg.dims=D;cfg.mask=sh.m?(x,y,z)=>sh.m(Math.floor(x*sh.dims[0]/D[0]),Math.floor(y*sh.dims[1]/D[1]),Math.floor(z*sh.dims[2]/D[2])):null}
+  return cfg};
 const dailyCfg=k=>{const d=new Date(k+'T12:00'),sz=[7,5,5,6,6,6,7][d.getDay()];
-  return{seed:parseInt(k.replace(/-/g,''))*31+7,dims:[sz,sz,sz],minL:3,maxL:11}};
-const taCfg=(i,seed)=>{const sz=i<2?3:i<5?4:5;return{seed:seed+i*101,dims:[sz,sz,sz],minL:2,maxL:6}};
-const zenCfg=seed=>{const sz=5+seed%3;return{seed,dims:[sz,sz,sz],minL:3,maxL:12}};
+  return{seed:parseInt(k.replace(/-/g,''))*31+7,dims:[sz,sz,sz],minL:3,maxL:11,legacy:k<'2026-11-17',triv:0.3}};  // agilidad
+const taCfg=(i,seed)=>{const sz=i<2?3:i<5?4:5;return{seed:seed+i*101,dims:[sz,sz,sz],minL:2,maxL:6,triv:0.25}};  // rápido, pero no regalado
+const zenCfg=seed=>{const sz=5+seed%3;return{seed,dims:[sz,sz,sz],minL:3,maxL:12,triv:0.2}};
 const shapeCfg=i=>{const sh=SHAPES[i%SHAPES.length];return{seed:5000+i*97,dims:sh.dims,mask:sh.m,minL:3,maxL:10,name:sh.name}};
 
 function makeLevel(cfg){
+  if(cfg.legacy)return makeLevelV1(cfg);
+  const r=rng(cfg.seed);
+  const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
+  const s=cfg.dims,N=s[0]*s[1]*s[2];
+  const idx=(x,y,z)=>x+s[0]*(y+s[1]*z);
+  const xyz=i=>[i%s[0],Math.floor(i/s[0])%s[1],Math.floor(i/(s[0]*s[1]))];
+  const inB=(x,y,z)=>x>=0&&y>=0&&z>=0&&x<s[0]&&y<s[1]&&z<s[2];
+  const valid=new Uint8Array(N);for(let i=0;i<N;i++){const p=xyz(i);valid[i]=cfg.mask?(cfg.mask(...p)?1:0):1}
+  const owner=new Int32Array(N).fill(-1);
+  const rayFree=(h,d,set)=>{let[x,y,z]=xyz(h);x+=d[0];y+=d[1];z+=d[2];
+    while(inB(x,y,z)){const j=idx(x,y,z);if(owner[j]>=0||set.has(j))return false;x+=d[0];y+=d[1];z+=d[2]}return true};
+  const dirOf=(a,b)=>{const A=xyz(a),B=xyz(b);return[B[0]-A[0],B[1]-A[1],B[2]-A[2]]};
+  const order=[...Array(N).keys()].filter(i=>valid[i]).map(i=>{const[x,y,z]=xyz(i);
+    const dep=Math.min(x,y,z,s[0]-1-x,s[1]-1-y,s[2]-1-z);return[i,-dep*(cfg.w??1)+r()*1.7]}).sort((a,b)=>a[1]-b[1]).map(a=>a[0]);
+  const snakes=[];
+  for(const c of order){
+    if(owner[c]>=0)continue;
+    const target=Math.round((cfg.minL+Math.floor(r()*(cfg.maxL-cfg.minL+1)))*(cfg.lm??1.25));
+    const path=[c],inP=new Set(path);let last=null;
+    while(path.length<target){
+      const cur=xyz(path[path.length-1]);
+      const opts=DIRS.filter(d=>{const x=cur[0]+d[0],y=cur[1]+d[1],z=cur[2]+d[2];
+        if(!inB(x,y,z))return false;const j=idx(x,y,z);return valid[j]&&owner[j]<0&&!inP.has(j)});
+      if(!opts.length)break;
+      const d=(last&&opts.includes(last)&&r()<(cfg.straight??0.3))?last:opts[Math.floor(r()*opts.length)];
+      const nx=idx(cur[0]+d[0],cur[1]+d[1],cur[2]+d[2]);path.push(nx);inP.add(nx);last=d;
+    }
+    // Elegir orientación/recorte: evitar puntas en la orilla apuntando hacia afuera (salen "gratis")
+    // Cuántas casillas de la figura hay enfrente (apuntar al vacío cuenta como salida regalada)
+    const rayLen=(h,d)=>{let[x,y,z]=xyz(h),n=0;x+=d[0];y+=d[1];z+=d[2];while(inB(x,y,z)){if(valid[idx(x,y,z)])n++;x+=d[0];y+=d[1];z+=d[2]}return n};
+    const triv=cfg.triv??0;
+    let placed=null,trivial=null;
+    for(let k=path.length;k>=1&&!placed;k--){
+      const parts=k===path.length?[path]:[path.slice(0,k),path.slice(path.length-k)];
+      const cand=[];
+      for(const p of parts){
+        const set=new Set(p);
+        if(p.length===1){for(const d of DIRS)if(rayFree(p[0],d,set))cand.push({cells:p.slice(),d,len:rayLen(p[0],d)})}
+        else{
+          const d1=dirOf(p[p.length-2],p[p.length-1]);if(rayFree(p[p.length-1],d1,set))cand.push({cells:p.slice(),d:d1,len:rayLen(p[p.length-1],d1)});
+          const d2=dirOf(p[1],p[0]);if(rayFree(p[0],d2,set))cand.push({cells:p.slice().reverse(),d:d2,len:rayLen(p[0],d2)});
+        }
+      }
+      const good=cand.filter(c=>c.len>0);
+      if(good.length){good.sort((a,b)=>b.len-a.len);placed=r()<0.6?good[0]:good[Math.floor(r()*good.length)]}
+      else if(cand.length&&!trivial)trivial=cand[Math.floor(r()*cand.length)];
+      if(!placed&&trivial&&r()<triv)placed=trivial;
+    }
+    if(!placed&&trivial&&r()<(cfg.fill??0.1))placed=trivial;
+    if(placed){const id=snakes.length;placed.cells.forEach(i=>owner[i]=id);
+      snakes.push({id,cells:placed.cells,d:placed.d,alive:true,shake:-1,flash:-1})}
+  }
+  // Rellenar huecos alargando colas de flechas, solo si el cubo sigue teniendo solución
+  if(cfg.pack!==false){
+    const solvable=()=>{const own=Int32Array.from(owner),alive=new Set(snakes.map(s=>s.id));
+      while(alive.size){let moved=false;
+        for(const id of [...alive]){const sn=snakes[id],h=xyz(sn.cells[sn.cells.length-1]),d=sn.d;let x=h[0]+d[0],y=h[1]+d[1],z=h[2]+d[2],ok=true;
+          while(inB(x,y,z)){const o=own[idx(x,y,z)];if(o>=0&&o!==id){ok=false;break}x+=d[0];y+=d[1];z+=d[2]}
+          if(ok){alive.delete(id);sn.cells.forEach(c=>own[c]=-1);moved=true}}
+        if(!moved)return false}return true};
+    for(let pass=0;pass<3;pass++){let changed=false;
+      for(const h of shuffle([...Array(N).keys()].filter(i=>valid[i]&&owner[i]<0))){
+        const p=xyz(h);
+        for(const n of shuffle(DIRS.slice())){const x=p[0]+n[0],y=p[1]+n[1],z=p[2]+n[2];if(!inB(x,y,z))continue;
+          const o=owner[idx(x,y,z)];if(o<0)continue;const sn=snakes[o];if(sn.cells[0]!==idx(x,y,z)||sn.cells.length>=cfg.maxL*2)continue;
+          sn.cells.unshift(h);owner[h]=o;
+          if(solvable()){changed=true;break}
+          sn.cells.shift();owner[h]=-1;}
+      }
+      if(!changed)break}
+  }
+  const info=new Map();
+  for(const sn of snakes)sn.cells.forEach((c,i)=>{const conns=[];
+    if(i>0)conns.push(dirOf(c,sn.cells[i-1]));
+    if(i<sn.cells.length-1)conns.push(dirOf(c,sn.cells[i+1]));
+    info.set(c,{conns,head:i===sn.cells.length-1})});
+  return{s,N,idx,xyz,inB,owner,snakes,info,left:snakes.length,total:snakes.length,lives:MAXLIVES,crashes:0,moves:0,
+    flying:[],state:'play',hint:null,hintT:-1,sel:null,undoUsed:false,t0:performance.now(),
+    ctr:[(s[0]-1)/2,(s[1]-1)/2,(s[2]-1)/2],R:0.5*Math.hypot(...s)};
+}
+// Generador anterior: solo para retos hasta el 16 nov 2026, para que el cubo de esos días no cambie
+function makeLevelV1(cfg){
   const r=rng(cfg.seed);
   const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
   const s=cfg.dims,N=s[0]*s[1]*s[2];
@@ -208,7 +319,7 @@ document.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>show('menu'));
 
 function refreshMenu(){
   const st=streak(),dk=todayKey(),dd=S.daily[dk];
-  $('mPlayLvl').textContent='Nivel '+S.level;
+  {const L=S.level,left=10*chapterOf(L)-L;$('mPlayLvl').textContent=`Nivel ${L} · `+(left===0?'🏁 ¡Meta!':`meta en ${left}`)}
   $('mStreak').textContent=st.cur?`🔥 ${st.cur} día${st.cur>1?'s':''} de racha`:'Saca cada flecha sin chocar';
   $('mDailyB').textContent=dd?'Hecho ✓':'Nuevo';$('mDailyB').className='badge'+(dd?' done':'');
   $('mTAs').textContent=S.ta?`Récord: ${S.ta}`:'60 segundos';
@@ -253,13 +364,28 @@ function play(mode){
   $('cGuide').setAttribute('aria-pressed',S.guide?'true':'false');
   show('game');hud();
 }
-function startLevel(n){play({type:'level',n})}
+function startLevel(n){
+  const c=chapterOf(n);
+  if(n>1&&(n-1)%10===0&&!S.seenCh[c]){S.seenCh[c]=1;save();return chapterIntro(c,()=>startLevel(n))}
+  if(isMeta(n))return metaIntro(n);
+  play({type:'level',n});
+}
+function chapterIntro(c,go){
+  const ch=chInfo(c),first=10*(c-1)+1;
+  dialog(`<div class="chtag">Capítulo ${c}</div><h2>${esc(ch.name)}</h2><p>${esc(ch.desc)}</p><p class="small">Niveles ${first} al ${first+9} · 🏁 Meta en el nivel ${first+9}</p>`,
+    [['¡Vamos!',go,true],['Menú',()=>show('menu')]]);
+}
+function metaIntro(n){
+  const c=chapterOf(n);
+  dialog(`<div class="metaico">🏁</div><div class="chtag">Meta ${c} · Nivel ${n}</div><h2>${esc(metaName(n))}</h2><p>El último reto del capítulo ${esc(chInfo(c).name)}. Supéralo para abrir el capítulo ${c+1}.</p>`,
+    [['Jugar la meta',()=>play({type:'level',n}),true],['Ahora no',()=>show('menu')]]);
+}
 function startTA(){const seed=Math.floor(Math.random()*1e6);TA={score:0,end:0,running:false,last:-1,seed,i:0};play({type:'ta',i:0,seed})}
 let TA=null;
 
 function hud(){
   const m=MODE.type;
-  const lbl={level:()=>['Nivel',MODE.n],daily:()=>{const d=new Date(MODE.key+'T12:00');return['Reto diario',d.getDate()+' '+MES[d.getMonth()].slice(0,3)]},
+  const lbl={level:()=>isMeta(MODE.n)?['Nivel '+MODE.n+' · 🏁 Meta '+chapterOf(MODE.n),G.name||metaName(MODE.n)]:['Nivel',MODE.n],daily:()=>{const d=new Date(MODE.key+'T12:00');return['Reto diario',d.getDate()+' '+MES[d.getMonth()].slice(0,3)]},
     ta:()=>['Contrarreloj','Cubo '+(MODE.i+1)],zen:()=>['Zen','Cubo '+((S.zen||0)+1)],shape:()=>['Formas',G.name]}[m]();
   $('gLblS').textContent=lbl[0];$('gLbl').textContent=lbl[1];
   $('gCntS').textContent=m==='ta'?'Puntos':'Flechas';
@@ -309,7 +435,13 @@ function onCleared(){
   G.state='win';SFX.win();buzz(30);
   const errs=G.crashes;
   if(m==='level'){
-    S.stars[MODE.n]=Math.max(S.stars[MODE.n]||0,stars);if(MODE.n>=S.level)S.level=MODE.n+1;save(true);
+    S.stars[MODE.n]=Math.max(S.stars[MODE.n]||0,stars);if(MODE.n>=S.level)S.level=MODE.n+1;
+    if(isMeta(MODE.n)){const c=chapterOf(MODE.n),nx=chInfo(c+1);S.metas[c]=1;S.seenCh[c+1]=1;save(true);setTimeout(()=>SFX.win(),450);
+      dialog(`<div class="metaico">🏁</div><div class="stars">${starStr(stars)}</div><h2>¡Meta ${c} superada!</h2><p>Terminaste el capítulo ${esc(chInfo(c).name)}.</p>
+        <div class="next"><div class="chtag">Sigue: Capítulo ${c+1}</div><b>${esc(nx.name)}</b><p>${esc(nx.desc)}</p></div>`,
+        [[`Empezar capítulo ${c+1}`,()=>startLevel(MODE.n+1),true],['Menú',()=>show('menu')]]);
+      return}
+    save(true);
     dialog(`<div class="stars">${starStr(stars)}</div><h2>Nivel ${MODE.n} listo</h2><p>${G.total} flechas · ${errs?errs+' choque'+(errs>1?'s':''):'sin choques'}</p>`,
       [['Siguiente nivel',()=>startLevel(MODE.n+1),true],['Menú',()=>show('menu')]]);
   }else if(m==='daily'){
@@ -455,12 +587,16 @@ async function renderLB(){
 
 // ---------- Panel: niveles ----------
 function renderLevels(){
-  const g=$('lvGrid');g.innerHTML='';const top=S.level+4;
-  const tot=Object.values(S.stars).reduce((a,b)=>a+b,0);
-  $('lvSum').textContent=`${S.level-1} niveles completados · ${tot} de ${(S.level-1)*3} estrellas`;
-  for(let n=1;n<=top;n++){const b=document.createElement('button'),st=S.stars[n]||0,locked=n>S.level;
-    b.innerHTML=`${n}<small class="stars">${locked?'<span class="off">···</span>':n<S.level?starStr(st):'<span style="color:var(--accent)">Jugar</span>'}</small>`;
-    if(n===S.level)b.className='cur';b.disabled=locked;b.onclick=()=>startLevel(n);g.appendChild(b)}
+  const g=$('lvGrid');g.innerHTML='';const top=Math.max(S.level+4,10*chapterOf(S.level));
+  const tot=Object.values(S.stars).reduce((a,b)=>a+b,0),mt=Object.keys(S.metas||{}).length;
+  $('lvSum').textContent=`${S.level-1} niveles completados · ${tot} de ${(S.level-1)*3} estrellas · ${mt} meta${mt===1?'':'s'} 🏁`;
+  for(let n=1;n<=top;n++){
+    if((n-1)%10===0){const c=chapterOf(n),h=document.createElement('div');h.className='chh';
+      h.innerHTML=`<span>Capítulo ${c}</span><b>${esc(chInfo(c).name)}</b>`;g.appendChild(h)}
+    const b=document.createElement('button'),st=S.stars[n]||0,locked=n>S.level,meta=isMeta(n);
+    b.innerHTML=`${meta?'🏁 ':''}${n}<small class="stars">${locked?'<span class="off">···</span>':n<S.level?starStr(st):'<span style="color:var(--accent)">Jugar</span>'}</small>`;
+    b.className=(meta?'meta ':'')+(n===S.level?'cur':'');if(meta)b.title='Meta: '+metaName(n);
+    b.disabled=locked;b.onclick=()=>startLevel(n);g.appendChild(b)}
 }
 
 // ---------- Panel: ajustes ----------
@@ -691,22 +827,29 @@ function okName(){
   if(v.length<2){toast('Escribe al menos 2 letras');return}
   $('ov').hidden=true;claimName(v,true);
 }
-// Si ese nombre ya existe (sin importar mayúsculas o espacios), este cel toma esa misma partida
-async function claimName(v,welcome){
+// Mismo nombre = misma partida. Si hay varias cuentas con ese nombre, todas las sesiones
+// se unen a la de más nivel (y en empate, siempre a la misma), así ningún dispositivo se queda aparte.
+async function claimName(v,welcome,silent){
   let back=false;
   if(Cloud.ok){try{
-    const rows=await Cloud.listPublic();
-    const hit=rows.find(r=>r.id!==S.pid&&normName(r.data.name)===normName(v)&&r.data.code);
-    if(hit&&hit.data.code!==CODE){
-      const old=CODE;CODE=hit.data.code;
-      const r=await Cloud.loadPrivate();
-      if(r){try{localStorage.setItem('fdc-code',CODE)}catch(e){}mergeRemote(r);S.pid=hit.id;applySkin();back=true}
-      else CODE=old;
-    }else if(hit){S.pid=hit.id;back=true}
+    const rows=(await Cloud.listRaw()).filter(r=>normName(r.data.name)===normName(v));
+    let best={code:CODE,lv:S.level||1};
+    for(const r of rows){
+      let code=r.data.code;if(!code){try{code=await Cloud.codeForPid(r.id)}catch(e){}}
+      if(!code)continue;
+      const lv=+r.data.level||1;
+      if(lv>best.lv||(lv===best.lv&&code<best.code))best={code,lv,pid:r.id};
+    }
+    if(best.code!==CODE){
+      const r=await Cloud.loadPrivate(best.code);   // si falla, no cambia nada
+      if(r){CODE=best.code;try{localStorage.setItem('fdc-code',CODE)}catch(e){}
+        Cloud.loaded=true;mergeRemote(r);if(r.name)S.name=r.name;S.pid=r.pid||best.pid||S.pid;applySkin();back=true}
+    }
   }catch(e){}}
-  S.name=back?(S.name&&normName(S.name)===normName(v)?S.name:v):v;
+  if(!S.name||!back)S.name=v;
   save(true);refreshMenu();if(view==='settings')renderSettings();
-  toast(back?'¡Qué onda de vuelta, '+S.name+'! Recuperé tu partida':(welcome?'¡Hola, '+v+'!':'Nombre guardado'));
+  if(back)toast('¡Qué onda de vuelta, '+S.name+'! Uní tu partida');
+  else if(!silent)toast(welcome?'¡Hola, '+v+'!':'Nombre guardado');
   if(Cloud.ok)Push.touch();
 }
 
