@@ -662,6 +662,9 @@ function drawCube(g,now,interactive){
   const sr=stageRect();VW=sr.w;VH=sr.h;CX=sr.x+sr.w/2;CY=sr.y+sr.h/2;
   D=g.R*4.2;F=Math.min(sr.w,sr.h)*(interactive?0.6:0.52)*(D-g.R)/g.R*CAM.zoom;
   const faces=[];
+  // Posición de la cámara en coordenadas del cubo (deshaciendo el giro)
+  const CP=(()=>{const cy=Math.cos(CAM.yaw),sy=Math.sin(CAM.yaw),cp=Math.cos(CAM.pitch),sp=Math.sin(CAM.pitch);
+    const y1=D*sp,z1=D*cp;return[-z1*sy,y1,z1*cy]})();
   for(const sn of g.snakes){
     if(!sn.alive)continue;
     let off=[0,0,0];
@@ -673,7 +676,8 @@ function drawCube(g,now,interactive){
         if(g.inB(x,y,z)&&g.owner[g.idx(x,y,z)]>=0)continue;
         const fc=add(base,n,0.5),rf=rot(fc),rn=rot(n);
         if(rn[0]*-rf[0]+rn[1]*-rf[1]+rn[2]*(D-rf[2])<=0)continue;
-        faces.push({sn,c,n,fc,rn,dist:Math.hypot(rf[0],rf[1],rf[2]-D)});
+        const vx=-rf[0],vy=-rf[1],vz=D-rf[2],face=(rn[0]*vx+rn[1]*vy+rn[2]*vz)/Math.hypot(vx,vy,vz);
+        faces.push({sn,c,n,fc,rn,face,dist:Math.abs(base[0]-CP[0])+Math.abs(base[1]-CP[1])+Math.abs(base[2]-CP[2])});
       }
     }
   }
@@ -694,6 +698,7 @@ function drawCube(g,now,interactive){
     ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
     ctx.fillStyle=rgb(tile,lit);ctx.fill();
     ctx.strokeStyle=rgb(T.edge,1,0.55);ctx.lineWidth=Math.max(0.5,k*0.012);ctx.stroke();
+    ctx.save();ctx.clip();if(f.face<0.32)ink=mix(tile,ink,Math.max(0.35,f.face/0.32));
     const inf=g.info.get(f.c),C=f.fc,lw=Math.max(1.3,k*0.1);
     ctx.strokeStyle=rgb(ink);ctx.fillStyle=rgb(ink);ctx.lineWidth=lw;
     let drew=false;
@@ -712,6 +717,7 @@ function drawCube(g,now,interactive){
       drew=true;
     }
     if(!drew&&inf.conns.length){const a=proj(C);ctx.beginPath();ctx.arc(a[0],a[1],lw*0.45,0,Math.PI*2);ctx.fill()}
+    ctx.restore();
     if(interactive)picks.push({sn,pts});
   }
   // Línea guía de la flecha seleccionada
@@ -752,7 +758,7 @@ function frame(now){
   if(!drag){CAM.yaw+=CAM.vy;CAM.pitch=Math.max(-1.45,Math.min(1.45,CAM.pitch+CAM.vp));CAM.vy*=0.92;CAM.vp*=0.92}
   if(view==='menu'){if(!drag)CAM.yaw+=0.004;drawCube(DEMO,now,false);return}
   if(!G)return;
-  drawCube(G,now,true);
+  {const sr=stageRect();ctx.save();ctx.beginPath();ctx.rect(sr.x,sr.y,sr.w,sr.h);ctx.clip();drawCube(G,now,true);ctx.restore()}
   if(MODE.type==='ta'){
     const left=TA.running?TA.end-now:60000;const el=$('gTimer');el.textContent=fmtT(left);el.classList.toggle('low',left<10000);
     const sec=Math.ceil(left/1000);if(TA.running&&sec<=5&&sec!==TA.last&&sec>0){TA.last=sec;SFX.tick()}
