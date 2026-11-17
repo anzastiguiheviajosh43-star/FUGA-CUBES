@@ -231,17 +231,25 @@ function makeLevel(cfg){
         const p=xyz(h);
         for(const n of shuffle(DIRS.slice())){const x=p[0]+n[0],y=p[1]+n[1],z=p[2]+n[2];if(!inB(x,y,z))continue;
           const o=owner[idx(x,y,z)];if(o<0)continue;const sn=snakes[o];if(sn.cells[0]!==idx(x,y,z)||sn.cells.length>=cfg.maxL*2)continue;
+          // Solo alargar por atrás: nunca una casilla enfrente de la punta (dejaría la punta a media línea)
+          {const hd=xyz(sn.cells[sn.cells.length-1]),dd=sn.d,v=[p[0]-hd[0],p[1]-hd[1],p[2]-hd[2]],t=v[0]*dd[0]+v[1]*dd[1]+v[2]*dd[2];
+           if(t>0&&v[0]===dd[0]*t&&v[1]===dd[1]*t&&v[2]===dd[2]*t)continue;
+           if(sn.cells.length===1&&!(v[0]===-dd[0]&&v[1]===-dd[1]&&v[2]===-dd[2]))continue}
           sn.cells.unshift(h);owner[h]=o;
           if(solvable()){changed=true;break}
           sn.cells.shift();owner[h]=-1;}
       }
       if(!changed)break}
   }
+  // Flechas de 2 casillas se ven revueltas: se parten en dos flechas cortas seguidas
+  for(const sn of snakes.slice()){if(sn.cells.length!==2)continue;
+    const back=sn.cells[0],id=snakes.length;sn.cells=[sn.cells[1]];owner[back]=id;
+    snakes.push({id,cells:[back],d:sn.d,alive:true,shake:-1,flash:-1})}
   const info=new Map();
   for(const sn of snakes)sn.cells.forEach((c,i)=>{const conns=[];
     if(i>0)conns.push(dirOf(c,sn.cells[i-1]));
     if(i<sn.cells.length-1)conns.push(dirOf(c,sn.cells[i+1]));
-    info.set(c,{conns,head:i===sn.cells.length-1})});
+    info.set(c,{conns,head:i===sn.cells.length-1,tail:i===0&&sn.cells.length>1})});
   return{s,N,idx,xyz,inB,owner,snakes,info,left:snakes.length,total:snakes.length,lives:MAXLIVES,crashes:0,moves:0,
     flying:[],state:'play',hint:null,hintT:-1,sel:null,undoUsed:false,t0:performance.now(),
     ctr:[(s[0]-1)/2,(s[1]-1)/2,(s[2]-1)/2],R:0.5*Math.hypot(...s)};
@@ -289,11 +297,15 @@ function makeLevelV1(cfg){
     if(placed){const id=snakes.length;placed.cells.forEach(i=>owner[i]=id);
       snakes.push({id,cells:placed.cells,d:placed.d,alive:true,shake:-1,flash:-1})}
   }
+  // Flechas de 2 casillas se ven revueltas: se parten en dos flechas cortas seguidas
+  for(const sn of snakes.slice()){if(sn.cells.length!==2)continue;
+    const back=sn.cells[0],id=snakes.length;sn.cells=[sn.cells[1]];owner[back]=id;
+    snakes.push({id,cells:[back],d:sn.d,alive:true,shake:-1,flash:-1})}
   const info=new Map();
   for(const sn of snakes)sn.cells.forEach((c,i)=>{const conns=[];
     if(i>0)conns.push(dirOf(c,sn.cells[i-1]));
     if(i<sn.cells.length-1)conns.push(dirOf(c,sn.cells[i+1]));
-    info.set(c,{conns,head:i===sn.cells.length-1})});
+    info.set(c,{conns,head:i===sn.cells.length-1,tail:i===0&&sn.cells.length>1})});
   return{s,N,idx,xyz,inB,owner,snakes,info,left:snakes.length,total:snakes.length,lives:MAXLIVES,crashes:0,moves:0,
     flying:[],state:'play',hint:null,hintT:-1,sel:null,undoUsed:false,t0:performance.now(),
     ctr:[(s[0]-1)/2,(s[1]-1)/2,(s[2]-1)/2],R:0.5*Math.hypot(...s)};
@@ -698,24 +710,30 @@ function drawCube(g,now,interactive){
     ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
     ctx.fillStyle=rgb(tile,lit);ctx.fill();
     ctx.strokeStyle=rgb(T.edge,1,0.55);ctx.lineWidth=Math.max(0.5,k*0.012);ctx.stroke();
-    ctx.save();ctx.clip();if(f.face<0.32)ink=mix(tile,ink,Math.max(0.35,f.face/0.32));
+    ctx.save();ctx.clip();if(f.face<0.5)ink=mix(tile,ink,Math.max(0.28,(f.face-0.08)/0.42));
     const inf=g.info.get(f.c),C=f.fc,lw=Math.max(1.3,k*0.1);
     ctx.strokeStyle=rgb(ink);ctx.fillStyle=rgb(ink);ctx.lineWidth=lw;
     let drew=false;
     ctx.beginPath();
-    for(const e of inf.conns){if(dot(e,f.n)!==0)continue;const a=proj(C),b=proj(add(C,e,0.5));ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);drew=true}
-    if(inf.head&&dot(sn.d,f.n)===0){const a=proj(C),b=proj(add(C,sn.d,0.18));ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);drew=true}
+    for(const e of inf.conns){if(dot(e,f.n)!==0)continue;const a=proj(inf.tail?add(C,e,0.2):C),b=proj(add(C,e,0.5));ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);drew=true}
+    if(inf.head&&dot(sn.d,f.n)===0){const a=proj(inf.conns.length?C:add(C,sn.d,-0.34)),b=proj(add(C,sn.d,0.08));ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);drew=true}
     ctx.stroke();
     if(inf.head){
       const dn=dot(sn.d,f.n);
       if(dn===0){const w=cross(f.n,sn.d);
-        const tip=proj(add(C,sn.d,0.44)),w1=proj(add(add(C,sn.d,0.1),w,0.22)),w2=proj(add(add(C,sn.d,0.1),w,-0.22));
+        const tip=proj(add(C,sn.d,0.34)),w1=proj(add(add(C,sn.d,0.02),w,0.2)),w2=proj(add(add(C,sn.d,0.02),w,-0.2));
         ctx.beginPath();ctx.moveTo(tip[0],tip[1]);ctx.lineTo(w1[0],w1[1]);ctx.lineTo(w2[0],w2[1]);ctx.closePath();ctx.lineWidth=lw*0.5;ctx.fill();ctx.stroke();
       }else{const ring=[];for(let i=0;i<18;i++){const a=i/18*Math.PI*2;ring.push(proj(add(add(C,u,Math.cos(a)*0.15),v,Math.sin(a)*0.15)))}
         ctx.beginPath();ring.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
-        if(dn>0)ctx.fill();else{ctx.lineWidth=lw*0.7;ctx.stroke()}}
+        if(dn>0)ctx.fill();
+        else{const q=[[.13,.13],[-.13,-.13],[.13,-.13],[-.13,.13]].map(([a,b2])=>proj(add(add(C,u,a),v,b2)));   // apunta hacia adentro: X
+          ctx.beginPath();ctx.moveTo(q[0][0],q[0][1]);ctx.lineTo(q[1][0],q[1][1]);ctx.moveTo(q[2][0],q[2][1]);ctx.lineTo(q[3][0],q[3][1]);ctx.lineWidth=lw*0.8;ctx.stroke()}}
       drew=true;
     }
+    // Inicio de la flecha: círculo vacío (sobre cualquier cara visible de esa casilla)
+    if(inf.tail){const ring=[];for(let i=0;i<20;i++){const a=i/20*Math.PI*2;ring.push(proj(add(add(C,u,Math.cos(a)*0.16),v,Math.sin(a)*0.16)))}
+      ctx.beginPath();ring.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
+      ctx.fillStyle=rgb(tile,lit);ctx.fill();ctx.lineWidth=lw*0.75;ctx.stroke();ctx.fillStyle=rgb(ink);drew=true}
     if(!drew&&inf.conns.length){const a=proj(C);ctx.beginPath();ctx.arc(a[0],a[1],lw*0.45,0,Math.PI*2);ctx.fill()}
     ctx.restore();
     if(interactive)picks.push({sn,pts});
