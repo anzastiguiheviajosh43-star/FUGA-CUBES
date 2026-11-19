@@ -582,10 +582,12 @@ async function renderLB(){
   else{me.innerHTML=`<div><small>Tu posición ${what}</small><b>${lbTab==='day'?'Juega el reto de hoy para entrar':'Haz un récord para entrar'}</b></div>`;me.hidden=false}
   if(!ent.length){lb.innerHTML='';note.textContent=lbTab==='day'?'Nadie ha jugado el reto de hoy todavía.':'Nadie tiene récord en contrarreloj todavía.';
     note.textContent+=' Pásales el link de la app a tus amigos para competir.';return}
-  const ps=await Cloud.profiles(ent.slice(0,50).map(e=>e.id));if(req!==lbReq)return;
+  // Solo el top 10; si tú vas más abajo, tu lugar aparece justo debajo del décimo
+  const TOP=10,shown=ent.slice(0,TOP),mine=myI>=TOP?ent[myI]:null;
+  const ps=await Cloud.profiles(shown.concat(mine?[mine]:[]).map(e=>e.id));if(req!==lbReq)return;
   lb.innerHTML='';
   const medal=['🥇','🥈','🥉'];
-  ent.slice(0,50).forEach((e,i)=>{const p=ps[e.id]||{},li=document.createElement('li');if(e.id===Cloud.uid)li.className='me';
+  const row=(e,i)=>{const p=ps[e.id]||{},li=document.createElement('li');if(e.id===Cloud.uid)li.className='me';
     const pos=document.createElement('span');pos.className='pos';pos.textContent=medal[i]||i+1;li.appendChild(pos);
     if(p.avatarUrl){const im=document.createElement('img');im.src=p.avatarUrl;im.alt='';li.appendChild(im)}
     const nm=document.createElement('span');nm.className='nm';nm.textContent=(p.name||'Jugador')+(e.id===Cloud.uid?' (tú)':'');li.appendChild(nm);
@@ -593,7 +595,9 @@ async function renderLB(){
     if(lbTab==='gen')sc.textContent=`Nivel ${e.v.level} · ${e.v.stars}★`;
     else if(lbTab==='day'){sc.innerHTML=`<span class="stars">${starStr(e.v.s)}</span> `;sc.append(fmtT(e.v.t))}
     else sc.textContent=e.v+' pts';
-    li.appendChild(sc);lb.appendChild(li)});
+    li.appendChild(sc);lb.appendChild(li)};
+  shown.forEach(row);
+  if(mine){const gap=document.createElement('li');gap.className='gap';gap.textContent=myI===TOP?'Tu lugar':`··· ${myI-TOP} jugador${myI-TOP===1?'':'es'} más ···`;lb.appendChild(gap);row(mine,myI);lb.lastChild.classList.add('pinned')}
   note.textContent=S.name?'Apareces como «'+S.name+'». Cámbialo en Ajustes.':'Ponte un apodo en Ajustes para que te reconozcan.';
 }
 
