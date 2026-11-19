@@ -23,6 +23,7 @@ function mergeRemote(r){
   S.level=Math.max(S.level||1,+r.level||1);
   for(const k in r.stars||{})S.stars[k]=Math.max(S.stars[k]||0,r.stars[k]);
   for(const k in r.daily||{})S.daily[k]=better(S.daily[k],r.daily[k]);
+  if(!S.inprog&&r.inprog)S.inprog=r.inprog;
   S.seenCh=Object.assign({},r.seenCh||{},S.seenCh||{});S.metas=Object.assign({},r.metas||{},S.metas||{});
   S.ta=Math.max(S.ta||0,r.ta||0);S.shapes=Math.max(S.shapes||0,r.shapes||0);S.zen=Math.max(S.zen||0,r.zen||0);
   if(r.pid)S.pid=r.pid;if(r.name&&!S.name)S.name=r.name;
@@ -331,7 +332,7 @@ document.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>show('menu'));
 
 function refreshMenu(){
   const st=streak(),dk=todayKey(),dd=S.daily[dk];
-  {const L=S.level,left=10*chapterOf(L)-L;$('mPlayLvl').textContent=`Nivel ${L} · `+(left===0?'🏁 ¡Meta!':`meta en ${left}`)}
+  {const L=S.level,left=10*chapterOf(L)-L,ip=S.inprog&&S.inprog.n===L?S.inprog:null;$('mPlayLvl').textContent=`Nivel ${L} · `+(ip?`⏸ te faltan ${ip.left}`:left===0?'🏁 ¡Meta!':`meta en ${left}`)}
   $('mStreak').textContent=st.cur?`🔥 ${st.cur} día${st.cur>1?'s':''} de racha`:'Saca cada flecha sin chocar';
   $('mDailyB').textContent=dd?'Hecho ✓':'Nuevo';$('mDailyB').className='badge'+(dd?' done':'');
   $('mTAs').textContent=S.ta?`Récord: ${S.ta}`:'60 segundos';
@@ -371,11 +372,33 @@ function play(mode){
   else if(mode.type==='ta')cfg=taCfg(mode.i,mode.seed);
   else if(mode.type==='zen')cfg=zenCfg(mode.seed);
   else cfg=shapeCfg(mode.i);
-  G=makeLevel(cfg);G.name=cfg.name;
+  G=makeLevel(cfg);G.name=cfg.name;G.removed=[];
   if(mode.type!=='ta')resetCam();
+  const ip=S.inprog;
+  if(mode.type==='level'&&ip&&ip.n===mode.n&&ip.total===G.total){
+    for(const id of ip.removed||[]){const sn=G.snakes[id];if(!sn||!sn.alive)continue;sn.alive=false;sn.cells.forEach(c=>G.owner[c]=-1);G.left--;G.removed.push(id)}
+    G.lives=ip.lives;G.crashes=ip.crashes;G.undoUsed=!!ip.undoUsed;G.moves=ip.moves||0;
+    if(G.removed.length)setTimeout(()=>toast(`Seguiste donde te quedaste · faltan ${G.left}`),250);
+  }
   $('cGuide').setAttribute('aria-pressed',S.guide?'true':'false');
   show('game');hud();
 }
+// Nivel a medias: se guarda en el cel en cada jugada y en la nube al salir o pausar
+function saveProg(push){
+  if(!G||!MODE||MODE.type!=='level'||G.state!=='play')return;
+  if(!G.removed.length&&!G.crashes){if(S.inprog&&S.inprog.n===MODE.n)delete S.inprog}
+  else S.inprog={n:MODE.n,total:G.total,left:G.left,removed:G.removed.slice(),lives:G.lives,crashes:G.crashes,undoUsed:G.undoUsed,moves:G.moves,at:Date.now()};
+  try{localStorage.setItem('fdc-state',JSON.stringify(S))}catch(e){}
+  if(push)pushPrivate();
+}
+function clearProg(){if(!S.inprog)return;delete S.inprog;try{localStorage.setItem('fdc-state',JSON.stringify(S))}catch(e){}pushPrivate()}
+function pauseLevel(){
+  if(!G||MODE.type!=='level'||G.state!=='play')return;
+  saveProg(true);
+  dialog(`<div class="metaico">⏸</div><h2>Pausa</h2><p>Nivel ${MODE.n} · quedan ${G.left} de ${G.total} flechas</p><p class="small">Tu avance se guarda aunque salgas o cierres la app.</p>`,
+    [['Seguir jugando',()=>{$('ov').hidden=true},true],['Reiniciar nivel',()=>{clearProg();play(MODE)}],['Salir al menú',()=>show('menu')]]);
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)saveProg(true)});
 function startLevel(n){
   const c=chapterOf(n);
   if(n>1&&(n-1)%10===0&&!S.seenCh[c]){S.seenCh[c]=1;save();return chapterIntro(c,()=>startLevel(n))}
@@ -409,6 +432,7 @@ function hud(){
     let h='';for(let i=0;i<MAXLIVES;i++)h+=`<span class="${i<G.lives?'on':'off'}">${heart}</span>`;$('gLives').innerHTML=h}
   $('cUndo').disabled=!(hasLives&&G.lives<MAXLIVES&&!G.undoUsed&&G.state==='play');
   $('cRestart').textContent=m==='ta'?'Nueva':'Reiniciar';
+  $('gPause').hidden=m!=='level';
 }
 
 function tapSnake(sn){
@@ -429,12 +453,14 @@ function move(sn){
     G.flying.push({E,ext,len:sn.cells.length-1,t0:now,dur:Math.min(900,420+sn.cells.length*25)});
     if(G.hint===sn)G.hint=null;
     if(MODE.type==='ta')TA.score++;
+    if(MODE.type==='level'){G.removed.push(sn.id);if(G.left>0)saveProg()}
     SFX.pop();buzz(12);hud();return;
   }
   sn.shake=now;b.sn.flash=now;SFX.crash();buzz(70);
   if(MODE.type==='ta'){TA.end-=3000;toast('−3 s');return}
   if(MODE.type==='zen'){return}
   G.lives--;G.crashes++;hud();
+  if(MODE.type==='level'){if(G.lives<=0)clearProg();else saveProg()}
   if(G.lives<=0){G.state='lose';setTimeout(()=>dialog(`<h2>Sin vidas</h2><p>Esa flecha chocó. El cubo es el mismo, ya conoces el camino.</p>`,
     [['Reintentar',()=>play(MODE),true],['Menú',()=>show('menu')]]),450)}
 }
@@ -447,6 +473,7 @@ function onCleared(){
   G.state='win';SFX.win();buzz(30);
   const errs=G.crashes;
   if(m==='level'){
+    if(S.inprog&&S.inprog.n===MODE.n)delete S.inprog;
     S.stars[MODE.n]=Math.max(S.stars[MODE.n]||0,stars);if(MODE.n>=S.level)S.level=MODE.n+1;
     if(isMeta(MODE.n)){const c=chapterOf(MODE.n),nx=chInfo(c+1);S.metas[c]=1;S.seenCh[c+1]=1;save(true);setTimeout(()=>SFX.win(),450);
       dialog(`<div class="metaico">🏁</div><div class="stars">${starStr(stars)}</div><h2>¡Meta ${c} superada!</h2><p>Terminaste el capítulo ${esc(chInfo(c).name)}.</p>
@@ -486,8 +513,9 @@ function share(key){
 }
 
 // ---------- Controles ----------
-$('gBack').onclick=()=>{if(TA)TA.running=false;show('menu')};
-$('cRestart').onclick=()=>{if(MODE.type==='ta')startTA();else play(MODE)};
+$('gBack').onclick=()=>{if(TA)TA.running=false;saveProg(true);show('menu')};
+$('gPause').onclick=pauseLevel;
+$('cRestart').onclick=()=>{if(MODE.type==='ta')startTA();else{if(MODE.type==='level')clearProg();play(MODE)}};
 $('cHint').onclick=()=>{
   if(!G||G.state!=='play')return;
   const exposed=sn=>sn.cells.some(c=>{const p=G.xyz(c);return DIRS.some(n=>{const x=p[0]+n[0],y=p[1]+n[1],z=p[2]+n[2];return!G.inB(x,y,z)||G.owner[G.idx(x,y,z)]<0})});
@@ -496,7 +524,7 @@ $('cHint').onclick=()=>{
 };
 $('cGuide').onclick=()=>{S.guide=!S.guide;save();$('cGuide').setAttribute('aria-pressed',S.guide?'true':'false');if(G)G.sel=null;
   toast(S.guide?'Guía activada':'Guía desactivada')};
-$('cUndo').onclick=()=>{if(!G||G.undoUsed||G.lives>=MAXLIVES)return;G.lives++;G.undoUsed=true;hud();toast('Recuperaste una vida')};
+$('cUndo').onclick=()=>{if(!G||G.undoUsed||G.lives>=MAXLIVES)return;G.lives++;G.undoUsed=true;hud();saveProg();toast('Recuperaste una vida')};
 $('zIn').onclick=()=>zoomAt(VW/2,VH/2,1.3);
 $('zOut').onclick=()=>zoomAt(VW/2,VH/2,1/1.3);
 $('zReset').onclick=resetCam;
